@@ -1,0 +1,8 @@
+flask
+numpy
+pandas
+scikit-learn
+xgboost
+torch
+joblib
+python-pptx

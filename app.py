@@ -3,6 +3,12 @@ Knowledge Gap Detection & Personalized Learning Recommendation System
 Flask Backend Application Server - Integrated with Machine Learning Model Pipeline
 """
 
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 import os
 import json
 import random
@@ -133,6 +139,31 @@ try:
             reconstructed = self.decoder(latent)
             return reconstructed, latent
 
+    # 5. Graph Convolutional Network (GCN) Concept Graph Model
+    class GCNLayer(nn.Module):
+        def __init__(self, in_features, out_features):
+            super().__init__()
+            self.weight = nn.Parameter(torch.FloatTensor(in_features, out_features))
+            nn.init.xavier_uniform_(self.weight)
+            
+        def forward(self, x, adj):
+            support = torch.matmul(x, self.weight)
+            return torch.matmul(adj, support)
+
+    class ConceptGraphGNN(nn.Module):
+        def __init__(self, num_concepts=20, feature_dim=16, hidden_dim=32):
+            super().__init__()
+            self.embedding = nn.Embedding(num_concepts, feature_dim)
+            self.gcn1 = GCNLayer(feature_dim, hidden_dim)
+            self.gcn2 = GCNLayer(hidden_dim, feature_dim)
+            self.relu = nn.ReLU()
+            
+        def forward(self, adj):
+            num_concepts = adj.shape[0]
+            x = self.embedding(torch.arange(num_concepts, device=adj.device))
+            h = self.relu(self.gcn1(x, adj))
+            return self.gcn2(h, adj)
+
     # Load Model Weights
     lstm_path = os.path.join(BASE_DIR, "models", "lstm_model.pth")
     if os.path.exists(lstm_path):
@@ -161,6 +192,13 @@ try:
         AUTOENCODER_MODEL.load_state_dict(torch.load(ae_path, weights_only=True))
         AUTOENCODER_MODEL.eval()
         print("✔ Successfully loaded Knowledge Autoencoder Model autoencoder_model.pth")
+
+    gnn_path = os.path.join(BASE_DIR, "models", "gnn_model.pth")
+    if os.path.exists(gnn_path):
+        GNN_MODEL = ConceptGraphGNN(num_concepts=10)
+        GNN_MODEL.load_state_dict(torch.load(gnn_path, weights_only=True))
+        GNN_MODEL.eval()
+        print("✔ Successfully loaded Concept Graph GNN Model gnn_model.pth")
 
 except Exception as e:
     print(f"⚠️ PyTorch Deep Learning Model Loading Info: {e}")
@@ -958,7 +996,7 @@ def load_questions(filter_skill=None):
     """Load questions from recommendation/questions.json"""
     q_file = os.path.join(BASE_DIR, "recommendation", "questions.json")
     if os.path.exists(q_file):
-        with open(q_file, "r") as f:
+        with open(q_file, "r", encoding="utf-8") as f:
             data = json.load(f)
             for idx, item in enumerate(data):
                 item["id"] = int(item.get("id", idx + 1))
@@ -1434,27 +1472,29 @@ def submit():
             hint_tot = 3
             sample_features = pd.DataFrame([{
                 "correct": 1 if total_correct > (total_questions / 2) else 0,
+                "correct_first_try": 1 if total_correct == total_questions else 0,
+                "user_avg_correct": accuracy / 100.0,
+                "user_avg_attempts": float(attempt_cnt),
+                "user_avg_hints": float(hint_cnt),
+                "user_avg_latency": 15000.0,
+                "skill_avg_correct": accuracy / 100.0,
+                "skill_avg_attempts": float(attempt_cnt),
                 "attempt_count": attempt_cnt,
                 "hint_count": hint_cnt,
                 "hint_ratio": hint_cnt / (hint_tot + 1),
                 "attempt_hint_sum": attempt_cnt + hint_cnt,
                 "log_ms_response": math.log1p(15000),
+                "log_overlap_time": math.log1p(30000),
                 "is_first_action_hint": 1 if hint_cnt > 0 else 0,
                 "opportunity": total_questions,
                 "position": 1,
+                "user_skill_hints": float(hint_cnt),
+                "user_skill_attempts": float(attempt_cnt),
                 "tutor_mode": "tutor",
                 "answer_type": "algebra",
-                "type": "Algebra"
+                "type": "Algebra",
+                "skill_name": "General Skill"
             }])
-            
-            # Filter columns based on model preprocessor expectations
-            try:
-                expected_num = MODEL.named_steps["preprocessor"].transformers_[0][2]
-                expected_cat = MODEL.named_steps["preprocessor"].transformers_[1][2]
-                expected_cols = list(expected_num) + list(expected_cat)
-                sample_features = sample_features[[c for c in expected_cols if c in sample_features.columns]]
-            except Exception:
-                pass
 
             ml_pred = MODEL.predict(sample_features)[0]
             if LABEL_ENCODER is not None:
@@ -1471,7 +1511,7 @@ def submit():
         except Exception as ml_err:
             print(f"ML Prediction Note: {ml_err}")
 
-    # PyTorch LSTM Deep Knowledge Tracing Model Prediction
+    # PyTorch LSTM Deep Knowledge Tracing & Deep Learning Models Prediction
     dl_logits_str = "[0.000, 0.000, 0.000]"
     if LSTM_MODEL is not None:
         try:
@@ -1509,6 +1549,22 @@ def submit():
                     _, latent_vec = AUTOENCODER_MODEL(seq_sample[0, 0, :].unsqueeze(0))
                     latent_str = np.array2string(latent_vec.numpy()[0], precision=3)
                     print(f"🔲 [Knowledge Autoencoder Output] 4D Latent Vector: {latent_str}")
+
+                if GNN_MODEL is not None:
+                    num_skills = 10
+                    adj_matrix = torch.eye(num_skills)
+                    for i in range(num_skills):
+                        for j in range(num_skills):
+                            if i != j: adj_matrix[i, j] = 0.25
+                    deg = torch.sum(adj_matrix, dim=1)
+                    deg_inv_sqrt = torch.pow(deg, -0.5)
+                    deg_inv_sqrt[torch.isinf(deg_inv_sqrt)] = 0.
+                    deg_mat = torch.diag(deg_inv_sqrt)
+                    adj_norm = torch.mm(torch.mm(deg_mat, adj_matrix), deg_mat)
+                    
+                    gnn_embeddings = GNN_MODEL(adj_norm)
+                    gnn_mean_norm = float(torch.mean(torch.norm(gnn_embeddings, dim=1)).item())
+                    print(f"🕸️ [Concept Graph GNN Output] Representation Norm: {gnn_mean_norm:.4f}")
         except Exception as dl_err:
             print(f"PyTorch Deep Models Prediction Note: {dl_err}")
 

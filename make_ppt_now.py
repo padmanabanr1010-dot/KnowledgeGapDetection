@@ -1,4 +1,8 @@
 import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
 import subprocess
 
 try:
@@ -323,6 +327,7 @@ p2.text = summary_text
 p2.font.size = Pt(15)
 p2.font.color.rgb = TEXT_WHITE
 
-output_path = "/home/sharath/KnowledgeGapDetection/Knowledge_Gap_Detection_Project_Presentation.pptx"
+import os
+output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Knowledge_Gap_Detection_Project_Presentation.pptx")
 prs.save(output_path)
 print(f"🎉 Presentation file successfully created at: {output_path}")
